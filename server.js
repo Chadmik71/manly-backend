@@ -35,7 +35,7 @@ app.post('/api/bookings/request',async(req,res)=>{
     if(date&&time){startsAt=new Date(sydneyToUTC(date,time));endsAt=new Date(startsAt.getTime()+durationMins*60000);console.log('Booking:',date,time,'UTC:',startsAt.toISOString());}
     else{startsAt=new Date(Date.now()+48*3600000);endsAt=new Date(startsAt.getTime()+durationMins*60000);}
     const svcSlug=(service||'remedial_massage').toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
-    await db().from('appointments').insert({client_id:client.id,service:svcSlug,status:'confirmed',starts_at:startsAt.toISOString(),ends_at:endsAt.toISOString(),duration_minutes:durationMins,price_cents:9500});
+    await db().from('appointments').insert({client_id:client.id,service:svcSlug,status:'confirmed',starts_at:startsAt.toISOString(),ends_at:endsAt.toISOString(),duration_minutes:durationMins,notes:notes||null,health_fund:fund||null,member_number:memberNo||null,price_cents:9500});
     return res.status(201).json({ok:true,clientId:client.id,appointment:{date,time,service,duration,clientName:firstName+' '+lastName},message:'Booking request received.'});
   }catch(err){console.error(err.message);return res.status(500).json({error:'Booking failed. Please call 0412 822 226.'});}
 });
