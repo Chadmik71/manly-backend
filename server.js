@@ -37,7 +37,31 @@ app.post('/api/bookings/request',async(req,res)=>{
     if(voucherUsed&&apt){const nb=Math.max(0,voucherUsed.balance_cents-priceCents);await db().from('gift_vouchers').update({balance_cents:nb,status:nb===0?'redeemed':'active'}).eq('id',voucherUsed.id);}
     if(apt){try{ await db().from('loyalty_visits').insert({client_id:client.id,appointment_id:apt.id,points:1}); }catch(_){}await db().from('clients').update({total_visits:(client.total_visits||0)+1,total_spent_cents:(client.total_spent_cents||0)+priceCents,loyalty_points:(client.loyalty_points||0)+1}).eq('id',client.id);}
     if(email){const st=startsAt.toLocaleString('en-AU',{timeZone:'Australia/Sydney',weekday:'long',day:'numeric',month:'long',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true});await sendEmail({to:email,subject:'Booking Confirmed - Manly Remedial & Thai Massage',html:'<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto"><div style="background:#1a5c8a;padding:20px;text-align:center"><h1 style="color:#fff;margin:0">Booking Confirmed</h1></div><div style="padding:20px;border:1px solid #e2e8f0"><p>Hi <strong>'+firstName+'</strong>!</p><p><strong>'+service+'</strong><br>'+st+'<br>'+duration+'<br>'+(staffPreference&&staffPreference!=='Any available therapist'?'Therapist: '+staffPreference+'<br>':'')+'<strong>$'+(priceCents/100).toFixed(2)+' AUD</strong></p>'+(isCouple?'<p>Couple booking: '+(partnerFirstName||'')+' - '+(partnerService||'')+'</p>':'')+'<p>Shop 2, 31 Belgrave St, Manly NSW 2095<br>0412 822 226</p></div></div>'}); }
-    return res.status(201).json({ok:true,clientId:client.id,message:'Booking confirmed!'});
+    
+    // Create partner appointment if couple booking
+    let partnerApt = null;
+    if(isCouple && partnerService && partnerFirstName){
+      const pDMins=parseInt(partnerDuration)||60;
+      const pSvc=(partnerService||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')||'relaxation_massage';
+      const pPrice=calcPrice(partnerService,pDMins);
+      const pEnd=new Date(startsAt.getTime()+pDMins*60000);
+      const pEmail='partner_'+Date.now()+'_'+email;
+      const{data:pClient}=await db().from('clients').upsert({
+        first_name:partnerFirstName.trim(),last_name:(partnerLastName||'').trim(),
+        email:pEmail.slice(0,100),updated_at:new Date().toISOString()
+      },{onConflict:'email'}).select().single();
+      if(pClient){
+        const pNotes='Service: '+partnerService+' | Duration: '+partnerDuration+' | COUPLE BOOKING with: '+firstName+' '+lastName;
+        const{data:pA}=await db().from('appointments').insert({
+          client_id:pClient.id,service:pSvc,status:'confirmed',
+          starts_at:startsAt.toISOString(),ends_at:pEnd.toISOString(),
+          duration_minutes:pDMins,price_cents:pPrice,notes:pNotes,
+          staff_name:null,is_walkin:false
+        }).select().single();
+        partnerApt=pA;
+      }
+    }
+    return res.status(201).json({ok:true,clientId:client.id,message:'Booking confirmed!',partnerBooked:!!partnerApt});
   }catch(err){console.error(err);return res.status(500).json({error:err.message});}
 });
 app.get('/api/bookings/availability',async(req,res)=>{
@@ -119,5 +143,15 @@ app.post('/api/reminders/send',async(req,res)=>{
   catch(err){return res.status(500).json({error:err.message});}
 });
 
+
+// ── Staff settings ───────────────────────────────────────────
+app.get('/api/staff-settings',async(req,res)=>{
+  try{const{data,error}=await db().from('staff_settings').select('*').order('sort_order');if(error)throw error;return res.json(data||[]);}
+  catch(err){return res.status(500).json({error:err.message});}
+});
+app.patch('/api/staff-settings/:staffId',async(req,res)=>{
+  try{const{active}=req.body;const{data,error}=await db().from('staff_settings').update({active,updated_at:new Date().toISOString()}).eq('staff_id',req.params.staffId).select().single();if(error)throw error;return res.json(data);}
+  catch(err){return res.status(500).json({error:err.message});}
+});
 const PORT=process.env.PORT||3001;
 app.listen(PORT,()=>console.log('Server running on port '+PORT));
