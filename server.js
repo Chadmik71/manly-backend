@@ -158,7 +158,7 @@ app.post('/api/reminders/send',async(req,res)=>{
 });
 
 
-// ââ Staff settings âââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ Staff settings Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 app.get('/api/staff-settings',async(req,res)=>{
   try{const{data,error}=await db().from('staff_settings').select('*').order('sort_order');if(error)throw error;return res.json(data||[]);}
   catch(err){return res.status(500).json({error:err.message});}
@@ -170,29 +170,31 @@ app.patch('/api/staff-settings/:staffId',async(req,res)=>{
 const PORT=process.env.PORT||3001;
 
 // Check slot availability
-app.get('/api/check-slot', async(req,res)=>{
-  const {staffName, startISO, endISO} = req.query;
-  if(!staffName||!startISO||!endISO) return res.json({available:true});
-  if(staffName.toLowerCase()==='any available') return res.json({available:true});
-  try{
-    const {data:conflicts} = await db().from('appointments')
-      .select('id,starts_at,ends_at,clients(first_name,last_name),service')
-      .ilike('staff_name',staffName)
-      .not('status','in','("cancelled","no_show")')
-      .lt('starts_at',endISO)
-      .gt('ends_at',startISO);
-    if(conflicts && conflicts.length > 0){
-      const c = conflicts[0];
-      const nm = c.clients?(c.clients.first_name+' '+c.clients.last_name).trim():'another client';
-      const t = new Date(c.starts_at).toLocaleTimeString('en-AU',{hour:'numeric',minute:'2-digit',hour12:true,timeZone:'Australia/Sydney'});
-      return res.json({available:false,message:staffName+' is already booked at '+t+' with '+nm+'. Please choose a different time or therapist.'});
+app.get('/api/check-slot', async (req, res) => {
+  const { staffName, startISO, endISO } = req.query;
+  if (!staffName || !startISO || !endISO) return res.json({ available: true });
+  if (staffName.toLowerCase() === 'any available') return res.json({ available: true });
+  try {
+    const { data, error } = await db()
+      .from('appointments')
+      .select('id, starts_at, ends_at')
+      .eq('staff_name', staffName)
+      .neq('status', 'cancelled')
+      .lt('starts_at', endISO)
+      .gt('ends_at', startISO);
+    if (error || !data) return res.json({ available: true });
+    if (data.length > 0) {
+      return res.json({
+        available: false,
+        message: staffName + ' already has an appointment at that time. Please choose a different time or therapist.',
+      });
     }
-    res.json({available:true});
-  }catch(e){res.json({available:true});}
+    return res.json({ available: true });
+  } catch (e) {
+    return res.json({ available: true }); // fail open on error
+  }
 });
 
-
-// Intake Form endpoints
 app.get('/api/intake-form', async (req, res) => {
   const { clientId, email } = req.query;
   if (!clientId && !email) return res.status(400).json({ error: 'clientId or email required' });
