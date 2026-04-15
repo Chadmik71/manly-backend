@@ -97,7 +97,21 @@ app.get('/api/appointments/:id/soap',async(req,res)=>{
 });
 
 app.post('/api/walkin',async(req,res)=>{
-  try{const{firstName,lastName,phone,service,duration,staffName}=req.body;const now=new Date();const dMins=parseInt(duration)||60;const ea=new Date(now.getTime()+dMins*60000);const svc=(service||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')||'remedial_massage';const pc=calcPrice(service,dMins);let cid=null;const em='walkin_'+Date.now()+'@walkin.local';const{data:c}=await db().from('clients').upsert({first_name:firstName||'Walk-In',last_name:lastName||'',phone:phone||null,email:em,updated_at:new Date().toISOString()},{onConflict:'email'}).select().single();cid=c?.id;const{data:apt,error}=await db().from('appointments').insert({client_id:cid,service:svc,status:'arrived',starts_at:now.toISOString(),ends_at:ea.toISOString(),duration_minutes:dMins,price_cents:pc,staff_name:staffName||null,is_walkin:true}).select().single();if(error)throw error;return res.status(201).json({ok:true,appointment:apt});}catch(err){return res.status(500).json({error:err.message});}
+  try{const{firstName,lastName,phone,service,duration,staffName}=req.body;const now=new Date();const dMins=parseInt(duration)||60;const ea=new Date(now.getTime()+dMins*60000);const svc=(service||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')||'remedial_massage';const pc=calcPrice(service,dMins);let cid=null;const em='walkin_'+Date.now()+'@walkin.local';const{data:c}=await db().from('clients').upsert({first_name:firstName||'Walk-In',last_name:lastName||'',phone:phone||null,email:em,updated_at:new Date().toISOString()},{onConflict:'email'}).select().single();cid=c?.id;const{data:apt,error}=await db()// Double-booking conflict check
+  if(staffName && staffName.toLowerCase() !== 'any available'){
+    const {data:conflicts} = await db().from('appointments')
+      .select('id,starts_at,ends_at,clients(first_name,last_name)')
+      .ilike('staff_name',staffName)
+      .not('status','in','("cancelled","no_show")')
+      .lt('starts_at',ea.toISOString())
+      .gt('ends_at',now);
+    if(conflicts && conflicts.length > 0){
+      const clash = conflicts[0];
+      const clashName = clash.clients ? (clash.clients.first_name+' '+clash.clients.last_name).trim() : 'another client';
+      return res.status(409).json({error:'conflict',message:staffName+' is already booked at this time (with '+clashName+'). Please choose a different time or therapist.'});
+    }
+  }
+  .from('appointments').insert({client_id:cid,service:svc,status:'arrived',starts_at:now.toISOString(),ends_at:ea.toISOString(),duration_minutes:dMins,price_cents:pc,staff_name:staffName||null,is_walkin:true}).select().single();if(error)throw error;return res.status(201).json({ok:true,appointment:apt});}catch(err){return res.status(500).json({error:err.message});}
 });
 
 app.post('/api/blocked-times',async(req,res)=>{
@@ -154,4 +168,27 @@ app.patch('/api/staff-settings/:staffId',async(req,res)=>{
   catch(err){return res.status(500).json({error:err.message});}
 });
 const PORT=process.env.PORT||3001;
+
+// Check slot availability
+app.get('/api/check-slot', async(req,res)=>{
+  const {staffName, startISO, endISO} = req.query;
+  if(!staffName||!startISO||!endISO) return res.json({available:true});
+  if(staffName.toLowerCase()==='any available') return res.json({available:true});
+  try{
+    const {data:conflicts} = await db().from('appointments')
+      .select('id,starts_at,ends_at,clients(first_name,last_name),service')
+      .ilike('staff_name',staffName)
+      .not('status','in','("cancelled","no_show")')
+      .lt('starts_at',endISO)
+      .gt('ends_at',startISO);
+    if(conflicts && conflicts.length > 0){
+      const c = conflicts[0];
+      const nm = c.clients?(c.clients.first_name+' '+c.clients.last_name).trim():'another client';
+      const t = new Date(c.starts_at).toLocaleTimeString('en-AU',{hour:'numeric',minute:'2-digit',hour12:true,timeZone:'Australia/Sydney'});
+      return res.json({available:false,message:staffName+' is already booked at '+t+' with '+nm+'. Please choose a different time or therapist.'});
+    }
+    res.json({available:true});
+  }catch(e){res.json({available:true});}
+});
+
 app.listen(PORT,()=>console.log('Server running on port '+PORT));
