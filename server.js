@@ -158,7 +158,7 @@ app.post('/api/reminders/send',async(req,res)=>{
 });
 
 
-// ── Staff settings ───────────────────────────────────────────
+// ââ Staff settings âââââââââââââââââââââââââââââââââââââââââââ
 app.get('/api/staff-settings',async(req,res)=>{
   try{const{data,error}=await db().from('staff_settings').select('*').order('sort_order');if(error)throw error;return res.json(data||[]);}
   catch(err){return res.status(500).json({error:err.message});}
@@ -189,6 +189,37 @@ app.get('/api/check-slot', async(req,res)=>{
     }
     res.json({available:true});
   }catch(e){res.json({available:true});}
+});
+
+
+// Intake Form endpoints
+app.get('/api/intake-form', async (req, res) => {
+  const { clientId, email } = req.query;
+  if (!clientId && !email) return res.status(400).json({ error: 'clientId or email required' });
+  try {
+    let q = db().from('intake_forms').select('*').order('created_at', { ascending: false }).limit(1);
+    if (clientId) q = q.eq('client_id', clientId);
+    else q = q.eq('email', email);
+    const { data } = await q.single();
+    if (!data) return res.json({ found: false });
+    return res.json({ found: true, intake: data.data, completedAt: data.completed_at });
+  } catch { res.json({ found: false }); }
+});
+
+app.post('/api/intake-form', async (req, res) => {
+  const { clientId, email, ...intakeData } = req.body;
+  if (!clientId && !email) return res.status(400).json({ error: 'clientId or email required' });
+  try {
+    const { data: existing } = clientId
+      ? await db().from('intake_forms').select('id').eq('client_id', clientId).single()
+      : { data: null };
+    if (existing?.id) {
+      await db().from('intake_forms').update({ data: intakeData, completed_at: new Date().toISOString() }).eq('id', existing.id);
+    } else {
+      await db().from('intake_forms').insert({ client_id: clientId||null, email: email||null, data: intakeData, completed_at: new Date().toISOString() });
+    }
+    return res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.listen(PORT,()=>console.log('Server running on port '+PORT));
