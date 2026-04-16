@@ -15,9 +15,15 @@ app.get('/api/check-slot',async(req,res)=>{
   if(!staffName||!startISO||!endISO)return res.json({available:true});
   if(staffName.toLowerCase()==='any available')return res.json({available:true});
   try{
-    const{data,error}=await db().from('appointments').select('id,starts_at,ends_at').eq('staff_name',staffName).neq('status','cancelled').lt('starts_at',endISO).gt('ends_at',startISO);
+    // Use first-name fuzzy match so 'Sakkharin T.' matches 'Sakkharin Taosuwan','Sakkharin' etc
+    const firstName=staffName.split(/[\s.]+/)[0];
+    const{data,error}=await db().from('appointments').select('id,starts_at,ends_at,staff_name')
+      .ilike('staff_name',firstName+'%')
+      .not('status','in','("cancelled","no_show")')
+      .lt('starts_at',endISO)
+      .gt('ends_at',startISO);
     if(error||!data)return res.json({available:true});
-    if(data.length>0)return res.json({available:false,message:staffName+' already has an appointment at that time.'});
+    if(data.length>0)return res.json({available:false,message:staffName+' is not available at that time. Please choose a different time or therapist.'});
     return res.json({available:true});
   }catch{return res.json({available:true});}
 });
