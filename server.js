@@ -163,4 +163,72 @@ app.patch('/api/appointments/:id/edit',async(req,res)=>{
   }catch(err){return res.status(500).json({error:err.message});}
 });
 
+
+// -- CLIENT SEARCH by phone/name/email --
+app.get('/api/clients/search',async(req,res)=>{
+  try{
+    const{q}=req.query;
+    if(!q||q.trim().length<2)return res.json([]);
+    const term=q.trim().replace(/\D/g,''); // strip non-digits for phone search
+    const termRaw=q.trim();
+    // Search by phone (digits only match), name, or email
+    let results=[];
+    // Phone search (if query looks like a phone number)
+    if(term.length>=4){
+      const{data:byPhone}=await db().from('clients').select('*').ilike('phone','%'+term+'%').limit(10);
+      if(byPhone)results.push(...byPhone);
+    }
+    // Name/email search
+    const{data:byName}=await db().from('clients').select('*').or('first_name.ilike.%'+termRaw+'%,last_name.ilike.%'+termRaw+'%,email.ilike.%'+termRaw+'%').limit(10);
+    if(byName){
+      for(const c of byName){
+        if(!results.find(r=>r.id===c.id))results.push(c);
+      }
+    }
+    // For each client get last appointment + counts
+    const enriched=await Promise.all(results.slice(0,10).map(async client=>{
+      const{data:apts}=await db().from('appointments').select('service,starts_at,staff_name,status,duration_minutes').eq('client_id',client.id).order('starts_at',{ascending:false}).limit(5);
+      const all=apts||[];
+      return{
+        ...client,
+        lastVisit:all[0]?.starts_at||null,
+        lastService:all[0]?.service||null,
+        lastStaff:all[0]?.staff_name||null,
+        totalVisits:client.total_visits||0,
+        recentApts:all,
+      };
+    }));
+    return res.json(enriched);
+  }catch(err){return res.status(500).json({error:err.message});}
+});
+
+// -- QUICK BOOK for existing client --
+app.post('/api/bookings/quick',async(req,res)=>{
+  try{
+    const{clientId,date,time,service,duration,staffName,notes,fund}=req.body;
+    if(!clientId)return res.status(400).json({error:'clientId required'});
+    const{data:client,error:ce}=await db().from('clients').select('*').eq('id',clientId).single();
+    if(ce||!client)return res.status(404).json({error:'Client not found'});
+    const dMins=parseInt(duration)||60;
+    const tz=sydTz(date);
+    const[tp,mer]=(time||'9:00 am').split(' ');
+    let[h,m]=tp.split(':').map(Number);
+    if(mer==='pm'&&h!==12)h+=12;if(mer==='am'&&h===12)h=0;
+    const startsAt=new Date(date+'T'+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':00'+tz);
+    const endsAt=new Date(startsAt.getTime()+dMins*60000);
+    const svc=(service||'').toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')||'remedial_massage';
+    const priceCents=calcPrice(service,dMins);
+    const{data:apt,error}=await db().from('appointments').insert({
+      client_id:clientId,service:svc,status:'confirmed',
+      starts_at:startsAt.toISOString(),ends_at:endsAt.toISOString(),
+      duration_minutes:dMins,price_cents:priceCents,
+      notes:notes||null,health_fund:fund||null,
+      staff_name:staffName||null,is_walkin:false,
+    }).select().single();
+    if(error)throw error;
+    await db().from('clients').update({total_visits:(client.total_visits||0)+1,total_spent_cents:(client.total_spent_cents||0)+priceCents,updated_at:new Date().toISOString()}).eq('id',clientId);
+    return res.status(201).json({ok:true,appointment:apt,client});
+  }catch(err){return res.status(500).json({error:err.message});}
+});
+
 app.listen(PORT,()=>console.log('Server running on port '+PORT));
