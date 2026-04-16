@@ -119,4 +119,48 @@ app.get('/api/intake-form',async(req,res)=>{const{clientId,email}=req.query;if(!
 app.post('/api/intake-form',async(req,res)=>{const{clientId,email,...intakeData}=req.body;if(!clientId&&!email)return res.status(400).json({error:'clientId or email required'});try{const{data:existing}=clientId?await db().from('intake_forms').select('id').eq('client_id',clientId).single():{data:null};if(existing?.id){await db().from('intake_forms').update({data:intakeData,completed_at:new Date().toISOString()}).eq('id',existing.id);}else{await db().from('intake_forms').insert({client_id:clientId||null,email:email||null,data:intakeData,completed_at:new Date().toISOString()});}return res.json({ok:true});}catch(e){res.status(500).json({error:e.message});}});
 
 const PORT=process.env.PORT||3001;
+
+// -- CLIENT HISTORY --
+app.get('/api/clients/:id/history',async(req,res)=>{
+  try{
+    const{data:client}=await db().from('clients').select('*').eq('id',req.params.id).single();
+    if(!client)return res.status(404).json({error:'Not found'});
+    const{data:apts}=await db().from('appointments').select('*').eq('client_id',req.params.id).order('starts_at',{ascending:false});
+    const all=apts||[];
+    const services={};const therapists={};
+    for(const a of all){
+      const s=a.service||'unknown';if(!services[s])services[s]=0;services[s]++;
+      const t=a.staff_name||'Any available';if(!therapists[t])therapists[t]=0;therapists[t]++;
+    }
+    const attended=all.filter(a=>['completed','in_session','arrived'].includes(a.status));
+    const totalSpent=attended.reduce((s,a)=>s+(a.price_cents||0),0);
+    return res.json({client,stats:{total:all.length,attended:attended.length,noShows:all.filter(a=>a.status==='no_show').length,cancelled:all.filter(a=>a.status==='cancelled').length,confirmed:all.filter(a=>a.status==='confirmed').length,totalSpentAUD:(totalSpent/100).toFixed(2),attendanceRate:all.length>0?Math.round((attended.length/all.length)*100):0},services,therapists,appointments:all.slice(0,50)});
+  }catch(err){return res.status(500).json({error:err.message});}
+});
+
+// -- EDIT BOOKING --
+app.patch('/api/appointments/:id/edit',async(req,res)=>{
+  try{
+    const{date,time,service,duration,staffName,notes}=req.body;
+    const updates={};
+    if(date&&time){
+      const dMins=parseInt(duration)||60;
+      const tz=sydTz(date);
+      const[tp,mer]=(time||'9:00 am').split(' ');
+      let[h,m]=tp.split(':').map(Number);
+      if(mer==='pm'&&h!==12)h+=12;if(mer==='am'&&h===12)h=0;
+      const startsAt=new Date(date+'T'+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':00'+tz);
+      updates.starts_at=startsAt.toISOString();
+      updates.ends_at=new Date(startsAt.getTime()+dMins*60000).toISOString();
+      updates.duration_minutes=dMins;
+    }
+    if(service){updates.service=service.toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');updates.price_cents=calcPrice(service,parseInt(duration)||60);}
+    if(staffName!==undefined)updates.staff_name=staffName||null;
+    if(notes!==undefined)updates.notes=notes;
+    const{data,error}=await db().from('appointments').update(updates).eq('id',req.params.id).select('*,clients(id,first_name,last_name,email,phone)').single();
+    if(error)throw error;
+    return res.json({ok:true,appointment:data});
+  }catch(err){return res.status(500).json({error:err.message});}
+});
+
 app.listen(PORT,()=>console.log('Server running on port '+PORT));
