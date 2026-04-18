@@ -118,6 +118,51 @@ app.get('/api/vouchers/:code',async(req,res)=>{try{const{data,error}=await db().
 app.get('/api/intake-form',async(req,res)=>{const{clientId,email}=req.query;if(!clientId&&!email)return res.status(400).json({error:'clientId or email required'});try{let q=db().from('intake_forms').select('*').order('created_at',{ascending:false}).limit(1);if(clientId)q=q.eq('client_id',clientId);else q=q.eq('email',email);const{data}=await q.single();if(!data)return res.json({found:false});return res.json({found:true,intake:data.data,completedAt:data.completed_at});}catch{res.json({found:false});}});
 app.post('/api/intake-form',async(req,res)=>{const{clientId,email,...intakeData}=req.body;if(!clientId&&!email)return res.status(400).json({error:'clientId or email required'});try{const{data:existing}=clientId?await db().from('intake_forms').select('id').eq('client_id',clientId).single():{data:null};if(existing?.id){await db().from('intake_forms').update({data:intakeData,completed_at:new Date().toISOString()}).eq('id',existing.id);}else{await db().from('intake_forms').insert({client_id:clientId||null,email:email||null,data:intakeData,completed_at:new Date().toISOString()});}if(clientId){const _cu={};if('date_of_birth' in intakeData)_cu.date_of_birth=intakeData.date_of_birth||null;if('has_private_health' in intakeData)_cu.has_private_health=intakeData.has_private_health;if('health_fund_provider' in intakeData)_cu.health_fund_provider=intakeData.health_fund_provider||null;if('health_fund_number' in intakeData)_cu.health_fund_number=intakeData.health_fund_number||null;if('referral_source' in intakeData)_cu.referral_source=intakeData.referral_source||null;if(Object.keys(_cu).length)await db().from('clients').update(_cu).eq('id',clientId);}return res.json({ok:true});}catch(e){res.status(500).json({error:e.message});}});
 
+// -- STAFF SCHEDULE OVERRIDES (per-day availability) --
+app.get('/api/staff-schedule/:staffId',async(req,res)=>{
+  try{
+    const{staffId}=req.params;const{date,from,to}=req.query;
+    let q=db().from('staff_schedule_overrides').select('*').eq('staff_id',staffId);
+    if(date)q=q.eq('date',date);
+    if(from)q=q.gte('date',from);
+    if(to)q=q.lte('date',to);
+    const{data,error}=await q.order('date');
+    if(error)throw error;
+    return res.json(data||[]);
+  }catch(e){return res.status(500).json({error:e.message});}
+});
+
+app.put('/api/staff-schedule/:staffId',async(req,res)=>{
+  try{
+    const{staffId}=req.params;
+    const{date,is_working,start_time,end_time,note}=req.body||{};
+    if(!date)return res.status(400).json({error:'date required (YYYY-MM-DD)'});
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date))return res.status(400).json({error:'date must be YYYY-MM-DD'});
+    const row={
+      staff_id:staffId,
+      date,
+      is_working:is_working!==false,
+      start_time:start_time||null,
+      end_time:end_time||null,
+      note:note||null,
+      updated_at:new Date().toISOString()
+    };
+    const{data,error}=await db().from('staff_schedule_overrides').upsert(row,{onConflict:'staff_id,date'}).select().single();
+    if(error)throw error;
+    return res.json(data);
+  }catch(e){return res.status(500).json({error:e.message});}
+});
+
+app.delete('/api/staff-schedule/:staffId',async(req,res)=>{
+  try{
+    const{staffId}=req.params;const{date}=req.query;
+    if(!date)return res.status(400).json({error:'date query param required'});
+    const{error}=await db().from('staff_schedule_overrides').delete().eq('staff_id',staffId).eq('date',date);
+    if(error)throw error;
+    return res.json({ok:true});
+  }catch(e){return res.status(500).json({error:e.message});}
+});
+
 const PORT=process.env.PORT||3001;
 
 // -- CLIENT HISTORY --
